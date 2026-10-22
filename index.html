@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>케찹 글씨</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Jua&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --cloth-a: #2f5f9e;
+    --cloth-b: #3b72b8;
+    --panel: #fffaf0;
+    --ink: #2b1a14;
+    --ketchup: #c8201e;
+    --line: #e2d6c2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --cloth-a: #1d3a63;
+      --cloth-b: #234777;
+      --panel: #2a211c;
+      --ink: #f7ead9;
+      --line: #4a3b32;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    font-family: "Jua", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    color: var(--ink);
+    background-color: var(--cloth-a);
+    background-image:
+      repeating-linear-gradient(0deg, var(--cloth-b) 0 28px, transparent 28px 56px),
+      repeating-linear-gradient(90deg, var(--cloth-b) 0 28px, transparent 28px 56px);
+    padding: env(safe-area-inset-top, 0px) 16px env(safe-area-inset-bottom, 0px);
+    display: flex; flex-direction: column; align-items: center;
+  }
+  h1 {
+    margin: 20px 0 4px; font-size: clamp(28px, 6vw, 40px); font-weight: 400;
+    color: #fff; text-shadow: 0 2px 0 rgba(0,0,0,.25);
+  }
+  .sub { margin: 0 0 14px; color: #fff; opacity: .9; font-size: 16px; }
+  .stage { position: relative; width: min(100%, 640px); }
+  canvas { display: block; width: 100%; height: auto; touch-action: none; cursor: crosshair; }
+  .hint {
+    position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%);
+    text-align: center; color: #9a8f86; font-size: 20px; pointer-events: none;
+    transition: opacity .3s;
+  }
+  .hint.gone { opacity: 0; }
+  .bar {
+    width: min(100%, 640px); margin: 14px 0 24px; padding: 14px;
+    background: var(--panel); border: 2px solid var(--line); border-radius: 14px;
+    display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: center; justify-content: center;
+  }
+  .sauces { display: flex; gap: 8px; }
+  .sauce {
+    font: inherit; font-size: 16px; color: var(--ink); background: transparent;
+    border: 2px solid var(--line); border-radius: 999px; padding: 6px 14px 6px 10px;
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+  }
+  .sauce i { width: 16px; height: 16px; border-radius: 50%; display: block; border: 2px solid rgba(0,0,0,.25); }
+  .sauce[aria-pressed="true"] { border-color: var(--ink); background: color-mix(in srgb, var(--ink) 10%, transparent); }
+  label.size { display: flex; align-items: center; gap: 8px; font-size: 16px; }
+  input[type=range] { width: 120px; accent-color: var(--ketchup); }
+  .actions { display: flex; gap: 8px; }
+  .btn {
+    font: inherit; font-size: 16px; padding: 8px 16px; border-radius: 10px; cursor: pointer;
+    border: 2px solid var(--ink); background: transparent; color: var(--ink);
+  }
+  .btn.main { background: var(--ketchup); border-color: var(--ketchup); color: #fff; }
+  button:focus-visible, input:focus-visible { outline: 3px solid #ffd23f; outline-offset: 2px; }
+</style>
+</head>
+<body>
+  <h1>케찹 글씨</h1>
+  <p class="sub">접시 위에 케찹으로 마음껏 써 보세요</p>
+
+  <div class="stage">
+    <canvas id="cv" aria-label="케찹으로 글씨를 쓰는 접시"></canvas>
+    <div class="hint" id="hint">여기에 손가락이나 마우스로 써 보세요</div>
+  </div>
+
+  <div class="bar">
+    <div class="sauces" id="sauces" role="group" aria-label="소스 선택"></div>
+    <label class="size">굵기
+      <input type="range" id="size" min="6" max="40" value="18">
+    </label>
+    <div class="actions">
+      <button class="btn" id="undo">되돌리기</button>
+      <button class="btn" id="clear">지우기</button>
+      <button class="btn main" id="save">그림 저장</button>
+    </div>
+  </div>
+
+<script>
+(function () {
+  var SAUCES = [
+    { name: "케찹", base: "#c8201e", dark: "#8a0f10" },
+    { name: "머스터드", base: "#e6b710", dark: "#a07a00" },
+    { name: "바비큐", base: "#5b2a15", dark: "#331509" }
+  ];
+  var cv = document.getElementById("cv");
+  var ctx = cv.getContext("2d");
+  var hint = document.getElementById("hint");
+  var sizeInput = document.getElementById("size");
+  var strokes = [];     // 좌표는 0~1로 정규화해서 저장 (화면 크기가 바뀌어도 유지)
+  var current = null;
+  var sauce = SAUCES[0];
+  var S = 640, dpr = 1;
+
+  // 소스 버튼 만들기
+  var box = document.getElementById("sauces");
+  SAUCES.forEach(function (s, i) {
+    var b = document.createElement("button");
+    b.className = "sauce";
+    b.setAttribute("aria-pressed", i === 0 ? "true" : "false");
+    b.innerHTML = '<i style="background:' + s.base + '"></i>' + s.name;
+    b.addEventListener("click", function () {
+      sauce = s;
+      Array.prototype.forEach.call(box.children, function (c) { c.setAttribute("aria-pressed", "false"); });
+      b.setAttribute("aria-pressed", "true");
+    });
+    box.appendChild(b);
+  });
+
+  function resize() {
+    var w = cv.parentElement.clientWidth;
+    dpr = window.devicePixelRatio || 1;
+    S = w;
+    cv.width = Math.round(w * dpr);
+    cv.height = Math.round(w * dpr);
+    render();
+  }
+
+  function drawPlate() {
+    var c = S / 2;
+    // 그림자
+    ctx.fillStyle = "rgba(0,0,0,.28)";
+    ctx.beginPath(); ctx.arc(c + S * 0.012, c + S * 0.025, S * 0.485, 0, Math.PI * 2); ctx.fill();
+    // 테두리
+    var g = ctx.createRadialGradient(c - S * 0.12, c - S * 0.15, S * 0.05, c, c, S * 0.49);
+    g.addColorStop(0, "#ffffff"); g.addColorStop(1, "#e4e6ee");
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(c, c, S * 0.485, 0, Math.PI * 2); ctx.fill();
+    // 접시 안쪽 홈
+    ctx.strokeStyle = "rgba(120,125,150,.25)"; ctx.lineWidth = S * 0.008;
+    ctx.beginPath(); ctx.arc(c, c, S * 0.37, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = "rgba(255,255,255,.9)"; ctx.lineWidth = S * 0.004;
+    ctx.beginPath(); ctx.arc(c, c, S * 0.376, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  function tracePath(s, ox, oy) {
+    var p = s.pts;
+    ctx.beginPath();
+    ctx.moveTo(p[0][0] * S + ox, p[0][1] * S + oy);
+    for (var i = 1; i < p.length - 1; i++) {
+      var mx = (p[i][0] + p[i + 1][0]) / 2 * S + ox;
+      var my = (p[i][1] + p[i + 1][1]) / 2 * S + oy;
+      ctx.quadraticCurveTo(p[i][0] * S + ox, p[i][1] * S + oy, mx, my);
+    }
+    var l = p[p.length - 1];
+    ctx.lineTo(l[0] * S + ox, l[1] * S + oy);
+  }
+
+  function drawStroke(s) {
+    var w = s.w * S;
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    if (s.pts.length < 2) {
+      var x = s.pts[0][0] * S, y = s.pts[0][1] * S;
+      ctx.fillStyle = s.dark; ctx.beginPath(); ctx.arc(x, y, w * 0.62, 0, 7); ctx.fill();
+      ctx.fillStyle = s.base; ctx.beginPath(); ctx.arc(x, y, w * 0.5, 0, 7); ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,.45)"; ctx.beginPath(); ctx.arc(x - w * 0.17, y - w * 0.17, w * 0.12, 0, 7); ctx.fill();
+      return;
+    }
+    // 1) 어두운 가장자리 2) 본색 3) 반짝이는 하이라이트
+    ctx.strokeStyle = s.dark; ctx.lineWidth = w * 1.12; tracePath(s, 0, 0); ctx.stroke();
+    ctx.strokeStyle = s.base; ctx.lineWidth = w * 0.92; tracePath(s, 0, 0); ctx.stroke();
+    ctx.strokeStyle = "rgba(255,255,255,.4)"; ctx.lineWidth = w * 0.2;
+    tracePath(s, -w * 0.18, -w * 0.18); ctx.stroke();
+  }
+
+  function render() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, S, S);
+    drawPlate();
+    ctx.save();
+    ctx.beginPath(); ctx.arc(S / 2, S / 2, S * 0.455, 0, Math.PI * 2); ctx.clip(); // 접시 밖으로 안 나가게
+    strokes.forEach(drawStroke);
+    if (current) drawStroke(current);
+    ctx.restore();
+  }
+
+  function pos(e) {
+    var r = cv.getBoundingClientRect();
+    return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+  }
+
+  cv.addEventListener("pointerdown", function (e) {
+    cv.setPointerCapture(e.pointerId);
+    current = { pts: [pos(e)], w: sizeInput.value / 640, base: sauce.base, dark: sauce.dark };
+    hint.classList.add("gone");
+    render();
+  });
+  cv.addEventListener("pointermove", function (e) {
+    if (!current) return;
+    var p = pos(e), last = current.pts[current.pts.length - 1];
+    if (Math.hypot(p[0] - last[0], p[1] - last[1]) > 0.003) { current.pts.push(p); render(); }
+  });
+  function end() {
+    if (!current) return;
+    strokes.push(current); current = null; render();
+  }
+  cv.addEventListener("pointerup", end);
+  cv.addEventListener("pointercancel", end);
+
+  document.getElementById("undo").addEventListener("click", function () { strokes.pop(); render(); });
+  document.getElementById("clear").addEventListener("click", function () {
+    strokes = []; hint.classList.remove("gone"); render();
+  });
+  document.getElementById("save").addEventListener("click", function () {
+    cv.toBlob(function (blob) {
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "ketchup-plate.png";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+    });
+  });
+
+  window.addEventListener("resize", resize);
+  resize();
+})();
+</script>
+</body>
+</html>
